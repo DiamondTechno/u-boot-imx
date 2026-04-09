@@ -1,0 +1,6 @@
+i.MX93 Diamond Technologies DEC Kit
+M:	Diamond Technologies
+S:	Maintained
+F:	board/diamondtech/imx93/
+F:	include/configs/imx93_dec.h
+F:	configs/imx93_dec_defconfig
