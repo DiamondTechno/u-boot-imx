@@ -239,6 +239,8 @@
 	  status = "okay";
 	  no-sdio;
 	  no-mmc;
+	 max-frequency = <104000000>; /* 104MHz is the max frequency for the carrier */
+	 no-1-8-v;
  };
  
  &adc1 {
