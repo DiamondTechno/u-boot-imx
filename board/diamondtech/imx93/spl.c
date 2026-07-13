@@ -74,11 +74,128 @@ void spl_board_init(void)
 }
 
 extern struct dram_timing_info dram_timing_1866mts;
-extern struct dram_timing_info lpddr4x_1gbyte_timing;
-extern struct dram_timing_info lpddr4x_2gbyte_timing;
+
+extern struct dram_timing_info dec_lpddr4x_512mb_3200mts_timing;
+extern struct dram_timing_info dec_lpddr4x_512mb_3733mts_timing;
+extern struct dram_timing_info dec_lpddr4x_1gbyte_3200mts_timing;
+extern struct dram_timing_info dec_lpddr4x_1gbyte_3733mts_timing;
+extern struct dram_timing_info dec_lpddr4x_2gbyte_3200mts_timing;
+extern struct dram_timing_info dec_lpddr4x_2gbyte_3733mts_timing;
+extern struct dram_timing_info dec_lpddr4x_2gbyte_3200mts_rank1_timing;
+extern struct dram_timing_info dec_lpddr4x_2gbyte_3733mts_rank1_timing;
+
+/*
+ * Pick a timing set for the DRAM fitted to this SOM. 2GB parts ship as both
+ * single- and dual-rank, so rank selects between two distinct tables; the
+ * smaller parts are single-rank only.
+ */
+static struct dram_timing_info *select_dram_timing(uint16_t speed_mts,
+						   uint16_t size_mbytes,
+						   uint8_t rank)
+{
+	switch (size_mbytes) {
+	case 2048:
+		if (rank == 1)
+			return speed_mts == 3733 ?
+				&dec_lpddr4x_2gbyte_3733mts_rank1_timing :
+				&dec_lpddr4x_2gbyte_3200mts_rank1_timing;
+
+		return speed_mts == 3733 ?
+			&dec_lpddr4x_2gbyte_3733mts_timing :
+			&dec_lpddr4x_2gbyte_3200mts_timing;
+
+	case 1024:
+		return speed_mts == 3733 ?
+			&dec_lpddr4x_1gbyte_3733mts_timing :
+			&dec_lpddr4x_1gbyte_3200mts_timing;
+
+	case 512:
+		return speed_mts == 3733 ?
+			&dec_lpddr4x_512mb_3733mts_timing :
+			&dec_lpddr4x_512mb_3200mts_timing;
+
+	default:
+		printf("Unsupported DRAM size %u MB, using 512MB @ 3200 MT/s\n",
+		       size_mbytes);
+		return &dec_lpddr4x_512mb_3200mts_timing;
+	}
+}
+
+/*
+ * The 2GB timing tables are authored for rank 2. A dual-rank part needs a few
+ * DDRC registers and DDRPHY training message entries adjusted; patch copies in
+ * RAM and repoint the timing at them so ddr_init() programs the right values.
+ */
+static void patch_ddrc_cfg_for_rank(struct dram_timing_info *timing, uint8_t rank)
+{
+	static struct dram_cfg_param ddrc_override[64];
+	int i;
+
+	if (!timing || rank != 2)
+		return;
+
+	if (timing->ddrc_cfg_num > ARRAY_SIZE(ddrc_override))
+		return;
+
+	for (i = 0; i < timing->ddrc_cfg_num; i++) {
+		ddrc_override[i] = timing->ddrc_cfg[i];
+
+		switch (ddrc_override[i].reg) {
+		case 0x4e300110:
+			ddrc_override[i].val = 0x44104001;
+			break;
+		case 0x4e300080:
+		case 0x4e300084:
+			ddrc_override[i].val = 0x80000412;
+			break;
+		}
+	}
+
+	timing->ddrc_cfg = ddrc_override;
+}
+
+static void patch_fsp_msg_for_rank(struct dram_timing_info *timing, uint8_t rank)
+{
+	static struct dram_cfg_param fsp_override[4][64];
+	int i, j;
+
+	if (!timing || rank != 2)
+		return;
+
+	if (!timing->fsp_msg || timing->fsp_msg_num > ARRAY_SIZE(fsp_override))
+		return;
+
+	for (i = 0; i < timing->fsp_msg_num; i++) {
+		struct dram_fsp_msg *msg = &timing->fsp_msg[i];
+		unsigned int cnt = msg->fsp_cfg_num;
+
+		if (!msg->fsp_cfg || !cnt || cnt > ARRAY_SIZE(fsp_override[0]))
+			continue;
+
+		for (j = 0; j < (int)cnt; j++) {
+			fsp_override[i][j] = msg->fsp_cfg[j];
+
+			switch (fsp_override[i][j].reg) {
+			case 0x54012:
+				fsp_override[i][j].val = 0x310;
+				break;
+			case 0x5401b:
+			case 0x54021:
+				fsp_override[i][j].val = 0x1126;
+				break;
+			case 0x54034:
+			case 0x5403a:
+				fsp_override[i][j].val = 0x2600;
+				break;
+			}
+		}
+
+		msg->fsp_cfg = fsp_override[i];
+	}
+}
 void spl_dram_init(void)
 {
-	struct dram_timing_info *ptiming = &dram_timing;
+	struct dram_timing_info *ptiming = &dec_lpddr4x_1gbyte_3200mts_timing;
 	struct gpio_desc desc[4];
 	struct udevice *dev;
 	int ret;
@@ -87,33 +204,52 @@ void spl_dram_init(void)
 	struct udevice *i2c_dev;
 	int addr, res;
 
+	uint16_t dram_size_mbytes = DEFAULT_SDRAM_SIZE_MB;
+	uint16_t dram_speed_mts = 3200;
+	uint8_t dram_rank = 1;
+
+	/* Not every selection method below uses all of these */
+	(void)desc;
+	(void)dev;
+	(void)ret;
+	(void)board_id;
+	(void)i2c_dev;
+	(void)addr;
+	(void)res;
+
 #if IS_ENABLED(CONFIG_DEC_IMX93_LPDDR4X_TIMING_BY_EEPROM)
-	uint16_t dram_size_mbytes = 0;
 	printf("Reading EEPROM over I2C...\n");
 	dec_eeprom_read(&eeprom);
 	printf("EEPROM read complete.\n");
 	printf("EEPROM contents at address: 0x%p\n", &eeprom);
-	dec_eeprom_print_prod_info(&eeprom);
 
-	/* Determine timing based on size */
-	dram_size_mbytes = dec_eeprom_get_dram_size_mb(&eeprom);
-	switch(dram_size_mbytes)
-	{
-		case 2048:
-			ptiming = &lpddr4x_2gbyte_timing;
-			printf("\tLoading timing for 2Gbyte LPDDR4x\r\n");
-			break;
-		case 1024:
-			ptiming = &lpddr4x_1gbyte_timing;
-			printf("\tLoading timing for 1Gbyte LPDDR4x\r\n");
-			break;
-		default:
-			printf("Unsupported DRAM size %d MB in EEPROM, defaulting to 1Gbyte timing\r\n", dram_size_mbytes);
-			ptiming = &lpddr4x_1gbyte_timing;
-			printf("\tLoading timing for 1Gbyte LPDDR4x\r\n");
-			break;
+	if (!dec_eeprom_is_valid(&eeprom)) {
+		printf("WARNING: EEPROM blank or invalid magic - using failsafe timing 1GB/3200/rank1\n");
+		printf("         Program EEPROM with correct DDR parameters after boot.\n");
+		dram_size_mbytes = 1024;
+		dram_speed_mts   = 3200;
+		dram_rank        = 1;
+	} else {
+		dec_eeprom_print_prod_info(&eeprom);
+		dram_size_mbytes = dec_eeprom_get_dram_size_mb(&eeprom);
+		dram_speed_mts   = dec_eeprom_get_dram_speed_mts(&eeprom);
+		dram_rank        = dec_eeprom_get_dram_rank(&eeprom);
 	}
 
+#if CONFIG_DEC_IMX93_MIN_SDRAM_SIZE_MB > 0
+	if (dram_size_mbytes < CONFIG_DEC_IMX93_MIN_SDRAM_SIZE_MB) {
+		printf("WARNING: DRAM %u MB < minimum %u MB, loading failsafe 1GB/3200/rank1\n",
+		       dram_size_mbytes, CONFIG_DEC_IMX93_MIN_SDRAM_SIZE_MB);
+		dram_size_mbytes = 1024;
+		dram_speed_mts   = 3200;
+		dram_rank        = 1;
+	}
+#endif
+
+	ptiming = select_dram_timing(dram_speed_mts, dram_size_mbytes, dram_rank);
+
+	printf("\tSelected board timing: %uMB @ %u MT/s (rank %u)\r\n",
+	       dram_size_mbytes, dram_speed_mts, dram_rank);
 #endif /* CONFIG_DEC_IMX93_LPDDR4X_TIMING_BY_EEPROM */
 #if IS_ENABLED (CONFIG_DEC_IMX93_LPDDR4X_TIMING_BY_BOARD_ID)
 /* Check HWID pins to determine which dram timing to load */
@@ -176,19 +312,26 @@ BANKS ARE WRONG IN SPL becuase u-boot doesn't use proper alias!
 
 	printf("Board ID = 0x%01x\r\n", board_id);
 
+	/* The board ID only encodes size; take speed and rank from the EEPROM */
+	dec_eeprom_read(&eeprom);
+	dram_speed_mts = dec_eeprom_get_dram_speed_mts(&eeprom);
+	dram_rank = dec_eeprom_get_dram_rank(&eeprom);
+
 	switch(board_id)
 	{
 		case 0x0f:
-		ptiming = &lpddr4x_2gbyte_timing;
-		printf("\tLoading timing for 2Gbyte LPDDR4x\r\n");
+		dram_size_mbytes = 2048;
 		break;
 
 		case 0x0e:
 		default:
-		ptiming = &lpddr4x_1gbyte_timing;
-		printf("\tLoading timing for 1Gbyte LPDDR4x\r\n");
+		dram_size_mbytes = 1024;
 		break;
 	}
+
+	ptiming = select_dram_timing(dram_speed_mts, dram_size_mbytes, dram_rank);
+	printf("\tSelected board timing: %uMB @ %u MT/s (rank %u)\r\n",
+	       dram_size_mbytes, dram_speed_mts, dram_rank);
 #endif /* CONFIG_DEC_IMX93_LPDDR4X_TIMING_BY_BOARD_ID */
 #if IS_ENABLED(CONFIG_DEC_IMX93_LPDDR4X_TIMING_BY_NAME)
 #ifdef CONFIG_DEC_IMX93_LPDDR4X_TIMING_FILENAME
@@ -198,17 +341,31 @@ static char *lpddr4t_timing_string = "default";
 #endif
 	printf("\r\nSetting LPDDR4 timing (%s) \r\n", lpddr4t_timing_string);
 
-	if (!strncmp("lpddr4x_2gbyte_timing", lpddr4t_timing_string, strlen("lpddr4x_2gbyte_timing")))
-	{
-		ptiming = &lpddr4x_2gbyte_timing;
-		printf("\tLoading timing for 2Gbyte LPDDR4x\r\n");
-	}
+	/* Size comes from the configured name; speed and rank from the EEPROM */
+	dec_eeprom_read(&eeprom);
+	dram_speed_mts = dec_eeprom_get_dram_speed_mts(&eeprom);
+	dram_rank = dec_eeprom_get_dram_rank(&eeprom);
+
+	if (strstr(lpddr4t_timing_string, "2gbyte"))
+		dram_size_mbytes = 2048;
+	else if (strstr(lpddr4t_timing_string, "512mb"))
+		dram_size_mbytes = 512;
 	else
-	{
-		ptiming = &lpddr4x_1gbyte_timing;
-		printf("\tLoading timing for 1Gbyte LPDDR4x\r\n");
-	}
+		dram_size_mbytes = 1024;
+
+	ptiming = select_dram_timing(dram_speed_mts, dram_size_mbytes, dram_rank);
+	printf("\tSelected board timing: %uMB @ %u MT/s (rank %u)\r\n",
+	       dram_size_mbytes, dram_speed_mts, dram_rank);
 #endif /* CONFIG_DEC_IMX93_LPDDR4X_TIMING_BY_NAME */
+
+	/*
+	 * Dual-rank parts only exist above 1GB; the smaller tables are authored
+	 * single-rank and need no patching.
+	 */
+	if (dram_rank == 2 && dram_size_mbytes > 1024) {
+		patch_ddrc_cfg_for_rank(ptiming, dram_rank);
+		patch_fsp_msg_for_rank(ptiming, dram_rank);
+	}
 
 	printf("DDR: %uMTS\n", ptiming->fsp_msg[0].drate);
 	ddr_init(ptiming);

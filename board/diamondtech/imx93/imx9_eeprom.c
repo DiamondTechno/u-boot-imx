@@ -91,6 +91,19 @@ uint16_t dec_eeprom_get_dram_speed_mts(struct dec_eeprom *ep)
 	return __be16_to_cpu(ep->dramspeed_mts);
 }
 
+uint8_t dec_eeprom_get_dram_rank(struct dec_eeprom *ep)
+{
+	/* Default to rank 1 when EEPROM is missing or older version */
+	if (!dec_eeprom_is_valid(ep))
+		return 1;
+
+	/* struct_ver >= 2: reserved[0] holds dram_rank; fall back to 1 */
+	if (ep->struct_ver >= 2)
+		return ep->reserved[0] ? ep->reserved[0] : 1;
+
+	return 1;
+}
+
 int dec_eeprom_get_cpn_string(struct dec_eeprom *ep, char *cpn_buf, size_t buf_size)
 {
 	flush_dcache_all();
@@ -116,6 +129,8 @@ void dec_eeprom_print_prod_info(struct dec_eeprom *ep)
 	printf("\tProduction date: %s\n", ep->date);
 	printf("\tSerial number: 0x%08x\n", be32_to_cpu(ep->serial));
 	printf("\tEEPROM struct version: 0x%x\n", ep->struct_ver);
+	if (ep->struct_ver >= 2)
+		printf("\tDRAM rank: %u\n", dec_eeprom_get_dram_rank(ep));
 	printf("\tDRAM size: %d MB\n", __be16_to_cpu(ep->dramsize_mbytes));
 	printf("\tDRAM speed: %d MT/s\n", __be16_to_cpu(ep->dramspeed_mts));
 }

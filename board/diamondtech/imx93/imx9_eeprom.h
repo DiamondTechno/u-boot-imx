@@ -55,7 +55,7 @@ struct __packed dec_eeprom
 	u8 date[9];				/* 24 - build date YYYYMMDD (null terminated) */
 	u16 dramsize_mbytes;	/* 33 - DRAM size in MBytes */
 	u16 dramspeed_mts;		/* 35 - DRAM speed in MT/s  */
-	u8 reserved[7];			/* 37 - reserved */
+	u8 reserved[7];			/* 37 - reserved; struct_ver >= 2: [0] = DRAM rank */
 	u32 crc32;				/* 44 - CRC32 of this structure */
 };
 
@@ -65,6 +65,7 @@ int dec_eeprom_read(struct dec_eeprom *e);
 int dec_eeprom_get_serial(struct dec_eeprom *e, u8 *serial);
 uint16_t dec_eeprom_get_dram_size_mb(struct dec_eeprom *ep);
 uint16_t dec_eeprom_get_dram_speed_mts(struct dec_eeprom *ep);
+uint8_t dec_eeprom_get_dram_rank(struct dec_eeprom *ep);
 void dec_eeprom_print_prod_info(struct dec_eeprom *e);
 int dec_eeprom_is_valid(struct dec_eeprom *ep);
 int dec_eeprom_get_cpn_string(struct dec_eeprom *ep, char *cpn_buf, size_t buf_size);

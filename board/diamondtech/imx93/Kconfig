@@ -33,9 +33,17 @@ endchoice
 config DEC_IMX93_LPDDR4X_TIMING_FILENAME
 	string "Specify the LPDDR4x Timing Filename"
     depends on DEC_IMX93_LPDDR4X_TIMING_BY_NAME
-	default "lpddr4x_1gbyte_timing"
+	default "dec_lpddr4x_1gbyte_3200mts_timing"
 	help
 	  Name of the timing file to use when DEC_IMX93_LPDDR4X_TIMING_BY_NAME is used.
 
+config DEC_IMX93_MIN_SDRAM_SIZE_MB
+	int "Minimum required SDRAM size in MB (0 = no minimum)"
+	default 0
+	help
+	  If non-zero, the SPL falls back to the failsafe 1GB timing if the
+	  EEPROM-reported DRAM size is below this value. Set to 1024 for
+	  machines that require at least 1 GB of DDR (e.g. those using video or
+	  M33 remoteproc with reserved memory above the 512 MB mark).
 
 endif
