@@ -1,0 +1,70 @@
+if TARGET_IMX91_DEC
+
+config SYS_BOARD
+	default "imx91"
+
+config SYS_VENDOR
+	default "diamondtech"
+
+config SYS_CONFIG_NAME
+	default "imx91_dec"
+
+choice
+	prompt "Select method to choose LPDDR4 timing for TARGET_IMX91_DEC"
+	default DEC_IMX91_LPDDR4_TIMING_BY_EEPROM
+
+config DEC_IMX91_LPDDR4_TIMING_BY_EEPROM
+	bool "Using Diamond Technologies EEPROM contents for LPDDR4 timing selection"
+	help
+	  Select the LPDDR4 timing based on contents of EEPROM on SOM.
+	  The EEPROM stores the DDR size and rank so the SPL can pick the
+	  correct 2400 MT/s timing.
+
+endchoice
+
+choice
+	prompt "LPDDR4 failsafe timing (used when EEPROM is absent or blank)"
+	default DEC_IMX91_FAILSAFE_DRAM_512MB_1600MTS
+	depends on DEC_IMX91_LPDDR4_TIMING_BY_EEPROM
+
+config DEC_IMX91_FAILSAFE_DRAM_2GB_RANK2
+	bool "2 GB / 2400 MT/s / rank2 (IMAG16L4JCDG-046I)"
+	help
+	  Use the 2 GB dual-rank LPDDR4 timing as the fallback when the
+	  EEPROM has not been programmed. Correct for boards populated with
+	  the IMAG16L4JCDG-046I (16 Gb, dual-rank, x16, 1 channel, 2400 MT/s).
+
+config DEC_IMX91_FAILSAFE_DRAM_512MB_1600MTS
+	bool "512 MB / 1600 MT/s / rank1 (universal failsafe)"
+	help
+	  512 MB single-rank LPDDR4 timing at 1600 MT/s. Used as the failsafe
+	  when EEPROM is blank. Lower speed provides wider margins for parts
+	  that may not train reliably at 2400 MT/s without exact EEPROM config.
+	  Once EEPROM is programmed the device will switch to the 2400 MT/s
+	  timing on next boot.
+
+config DEC_IMX91_FAILSAFE_DRAM_512MB_RANK1
+	bool "512 MB / 2400 MT/s / rank1 / 60-ohm CA ODT"
+	help
+	  Use the 512 MB single-rank LPDDR4 timing as the fallback when the
+	  EEPROM has not been programmed. Correct for boards populated with
+	  a 512 MB single-rank LPDDR4 device.
+
+config DEC_IMX91_FAILSAFE_DRAM_512MB_RANK1_CAODT120
+	bool "512 MB / 2400 MT/s / rank1 / 120-ohm CA ODT (universal failsafe)"
+	help
+	  512 MB address mapping with 120-ohm CA ODT. Intended as a universal
+	  failsafe that works on both single-rank 512 MB parts and rank2 die
+	  (e.g. IMAG16L4JCDG-046I) used with rank1 addressing. Use this when
+	  a single image must cold-boot any part before EEPROM is programmed.
+
+endchoice
+
+config DEC_IMX91_MIN_SDRAM_SIZE_MB
+	int "Minimum required SDRAM size in MB (0 = no minimum)"
+	default 0
+	help
+	  If non-zero, the SPL falls back to the failsafe timing if the
+	  EEPROM-reported DRAM size is less than this value.
+
+endif
